@@ -10,7 +10,7 @@ Git checkout / worktree
 + reusable Herdr layout
 ```
 
-Current version: **0.4.0**
+Current version: **0.5.0**
 
 ## Install
 
@@ -36,6 +36,7 @@ hd [--layout NAME]
 hd new <branch> [--base REF] [--layout NAME]
 hd open <branch> [--layout NAME]
 hd list
+hd close
 hd rm [branch|path]
 hd layout save [name]
 hd layout init [name]
@@ -53,6 +54,9 @@ hd new <branch>
 
 hd open <branch>
 → open an existing Git worktree in Herdr
+
+hd close
+→ close the current Herdr workspace; keep the Git checkout
 ```
 
 `hd rm` removes a linked worktree but **never deletes the Git branch**.
@@ -254,10 +258,26 @@ hd open feature/login
 
 ## Closing a Herdr workspace
 
-CLI:
+From inside a Herdr workspace:
+
+```bash
+hd close
+```
+
+`hd` asks for confirmation before closing the current workspace. This closes **Herdr state only** and keeps the Git checkout/worktree intact.
+
+If the current workspace is a primary workspace with linked-worktree workspaces still open, Herdr requires explicit group intent. `hd` detects `workspace_group_close_required` and asks for a second confirmation before closing the whole Herdr workspace group.
+
+Equivalent raw Herdr command:
 
 ```bash
 herdr workspace close <workspace_id>
+```
+
+For a whole group:
+
+```bash
+herdr workspace close <workspace_id> --group
 ```
 
 The default TUI key is:
@@ -266,15 +286,7 @@ The default TUI key is:
 prefix + Shift+D
 ```
 
-This closes **Herdr state only**. It does not remove the Git worktree checkout.
-
-If a primary workspace still has linked-worktree workspaces open, Herdr requires explicit group intent:
-
-```bash
-herdr workspace close <workspace_id> --group
-```
-
-To actually delete a linked Git checkout, use `hd rm` or Herdr's `worktree remove` command instead.
+To actually delete a linked Git checkout, use `hd rm` instead. `hd close` never removes a Git worktree.
 
 ## Herdr layout API
 
