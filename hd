@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-HD_VERSION="0.4.0"
+HD_VERSION="0.5.0"
 CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 LAYOUT_DIR="${HD_LAYOUT_DIR:-$CONFIG_HOME/herdr/layouts}"
 DEFAULT_LAYOUT="${HD_DEFAULT_LAYOUT:-dev}"
@@ -525,6 +525,57 @@ list_workspaces() {
   printf '\n'
 }
 
+confirm_action() {
+  local prompt="$1" answer
+  printf '%s' "$prompt" >&2
+  IFS= read -r answer || return 1
+  case "$answer" in
+    y|Y|yes|YES|Yes) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+close_workspace() {
+  local workspace_id="${HERDR_WORKSPACE_ID:-}" response code
+  [[ -n "$workspace_id" ]] || die "Not inside a Herdr workspace"
+
+  log "Close current Herdr workspace?"
+  log "  workspace: $workspace_id"
+  log "  cwd: ${PWD:-unknown}"
+  if ! confirm_action "Continue? [y/N] "; then
+    log "Cancelled"
+    return
+  fi
+
+  if response="$(herdr workspace close "$workspace_id")"; then
+    json_check_error "$response" "workspace.close" || return 1
+    return
+  fi
+
+  if ! printf '%s\n' "$response" | jq -e . >/dev/null 2>&1; then
+    printf '[hd] ERROR: workspace.close command failed\n' >&2
+    [[ -n "$response" ]] && printf '%s\n' "$response" >&2
+    return 1
+  fi
+
+  code="$(printf '%s\n' "$response" | jq -r '.error.code // empty')"
+  if [[ "$code" != "workspace_group_close_required" ]]; then
+    printf '[hd] ERROR: workspace.close failed\n' >&2
+    printf '%s\n' "$response" | jq '.error // .' >&2
+    return 1
+  fi
+
+  warn "This workspace has linked worktree workspaces."
+  warn "Closing it requires closing the entire Herdr group."
+  if ! confirm_action "Close the whole group? [y/N] "; then
+    log "Cancelled"
+    return
+  fi
+
+  herdr_json "workspace.close" workspace close "$workspace_id" --group >/dev/null \
+    || return 1
+}
+
 remove_worktree() {
   local target="${1:-}" worktrees primary selected branch path ws_json workspace_id count choice candidates
   git_root >/dev/null || die "Not inside a Git repository"
@@ -620,6 +671,7 @@ Usage:
                                         Create a new worktree + workspace
   hd open <branch> [--layout NAME]      Open an existing worktree
   hd list                               List checkouts and Herdr state
+  hd close                              Close current Herdr workspace
   hd rm [branch|path]                   Remove linked worktree; never branch
   hd layout save [name]                 Save current Herdr tab layout globally
   hd layout init [name]                 Copy global layout into repo-local .herdr
@@ -630,6 +682,7 @@ Rules:
   hd        never creates a Git worktree; it ensures the current checkout is open.
   hd new    requires that the branch is not already checked out in a worktree.
   hd open   requires that the branch already has a Git worktree checkout.
+  hd close  closes Herdr state only; it never removes the Git worktree.
   --layout  is a bootstrap layout only; existing Herdr workspaces are focused unchanged.
   Layouts   resolve repo/.herdr/layouts first, then ~/.config/herdr/layouts.
 
@@ -673,6 +726,12 @@ main() {
       (( $# == 0 )) || die "Usage: hd list"
       require_deps
       list_workspaces
+      ;;
+    close)
+      (( $# == 0 )) || die "Usage: hd close"
+      need herdr
+      need jq
+      close_workspace
       ;;
     rm)
       (( $# <= 1 )) || die "Usage: hd rm [branch|path]"
