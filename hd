@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-HD_VERSION="0.5.0"
+HD_VERSION="0.6.0"
 CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 LAYOUT_DIR="${HD_LAYOUT_DIR:-$CONFIG_HOME/herdr/layouts}"
 DEFAULT_LAYOUT="${HD_DEFAULT_LAYOUT:-dev}"
@@ -411,25 +411,34 @@ open_current() {
 new_worktree() {
   local branch="${1:-}" base="HEAD" layout="$DEFAULT_LAYOUT"
   local root worktrees existing source file created workspace_id tab_id worktree_dir branch_exists=0
-  [[ -n "$branch" ]] || die "Usage: hd new <branch> [--base REF] [--layout NAME]"
+  local no_open=0 layout_set=0
+  [[ -n "$branch" ]] || die "Usage: hd new <branch> [--base REF] [--layout NAME] [--no-open]"
   shift
 
   while (( $# )); do
     case "$1" in
       --base)
-        [[ $# -ge 2 ]] || die "Usage: hd new <branch> [--base REF] [--layout NAME]"
+        [[ $# -ge 2 ]] || die "Usage: hd new <branch> [--base REF] [--layout NAME] [--no-open]"
         base="$2"; shift 2 ;;
       --layout)
-        [[ $# -ge 2 ]] || die "Usage: hd new <branch> [--base REF] [--layout NAME]"
-        layout="$2"; shift 2 ;;
-      *) die "Unexpected argument: $1 (use --base REF / --layout NAME)" ;;
+        [[ $# -ge 2 ]] || die "Usage: hd new <branch> [--base REF] [--layout NAME] [--no-open]"
+        layout="$2"; layout_set=1; shift 2 ;;
+      --no-open)
+        no_open=1; shift ;;
+      *) die "Unexpected argument: $1 (use --base REF / --layout NAME / --no-open)" ;;
     esac
   done
 
+  (( no_open == 0 || layout_set == 0 )) \
+    || die "--layout cannot be used with --no-open because no layout is applied"
+
   root="$(git_root)" || die "Not inside a Git repository"
   validate_branch_name "$branch"
-  file="$(resolve_layout_file "$layout")"
-  validate_layout_file "$file"
+
+  if (( no_open == 0 )); then
+    file="$(resolve_layout_file "$layout")"
+    validate_layout_file "$file"
+  fi
 
   worktrees="$(git_worktrees_json)"
   existing="$(worktree_path_for_branch "$worktrees" "$branch")"
@@ -459,8 +468,20 @@ new_worktree() {
   tab_id="$(printf '%s\n' "$created" | jq -r '.result.tab.tab_id // empty')"
   worktree_dir="$(printf '%s\n' "$created" | jq -r '.result.worktree.path // .result.workspace.cwd // empty')"
   [[ -n "$workspace_id" ]] || { printf '%s\n' "$created" | jq >&2; die "workspace_id not found in worktree.create response"; }
-  [[ -n "$tab_id" ]] || { printf '%s\n' "$created" | jq >&2; die "tab_id not found in worktree.create response"; }
   [[ -n "$worktree_dir" ]] || { printf '%s\n' "$created" | jq >&2; die "worktree path not found in worktree.create response"; }
+
+  if (( no_open )); then
+    if ! herdr_json "workspace.close" workspace close "$workspace_id" >/dev/null; then
+      warn "Worktree was created but its Herdr workspace could not be closed: $workspace_id"
+      exit 1
+    fi
+    log "Ready: $branch"
+    log "Path:  $worktree_dir"
+    log "Herdr workspace left closed."
+    return
+  fi
+
+  [[ -n "$tab_id" ]] || { printf '%s\n' "$created" | jq >&2; die "tab_id not found in worktree.create response"; }
 
   if ! apply_layout "$tab_id" "$worktree_dir" "$layout"; then
     warn "Worktree was created but layout application failed; leaving it intact: $worktree_dir"
@@ -667,8 +688,8 @@ hd $HD_VERSION
 
 Usage:
   hd [--layout NAME]                    Ensure/focus current checkout workspace
-  hd new <branch> [--base REF] [--layout NAME]
-                                        Create a new worktree + workspace
+  hd new <branch> [--base REF] [--layout NAME] [--no-open]
+                                        Create a new worktree; keep workspace closed with --no-open
   hd open <branch> [--layout NAME]      Open an existing worktree
   hd list                               List checkouts and Herdr state
   hd close                              Close current Herdr workspace
@@ -681,6 +702,7 @@ Usage:
 Rules:
   hd        never creates a Git worktree; it ensures the current checkout is open.
   hd new    requires that the branch is not already checked out in a worktree.
+  --no-open creates the worktree but leaves its Herdr workspace closed.
   hd open   requires that the branch already has a Git worktree checkout.
   hd close  closes Herdr state only; it never removes the Git worktree.
   --layout  is a bootstrap layout only; existing Herdr workspaces are focused unchanged.
