@@ -10,7 +10,7 @@ Git checkout / worktree
 + reusable Herdr layout
 ```
 
-Current version: **0.5.0**
+Current version: **0.6.0**
 
 ## Install
 
@@ -33,7 +33,7 @@ Make sure `~/.local/bin` is in `PATH`.
 
 ```bash
 hd [--layout NAME]
-hd new <branch> [--base REF] [--layout NAME]
+hd new <branch> [--base REF] [--layout NAME] [--no-open]
 hd open <branch> [--layout NAME]
 hd list
 hd close
@@ -52,6 +52,9 @@ hd
 hd new <branch>
 → create a Git worktree + Herdr workspace
 
+hd new <branch> --no-open
+→ create the Git worktree but leave its Herdr workspace closed
+
 hd open <branch>
 → open an existing Git worktree in Herdr
 
@@ -60,6 +63,52 @@ hd close
 ```
 
 `hd rm` removes a linked worktree but **never deletes the Git branch**.
+
+## Worktree behavior
+
+```bash
+hd new feature/login --base main
+```
+
+- branch missing → create branch + worktree
+- branch exists but has no worktree → create worktree from existing branch
+- branch already has a worktree → refuse and suggest `hd open`
+
+By default, `hd new` lets Herdr create the checkout, applies the selected layout, and focuses the new workspace.
+
+### Create a worktree without leaving a workspace open
+
+For agents or batch workflows that should prepare checkouts without filling the Herdr sidebar:
+
+```bash
+hd new agent/task-a --no-open
+hd new agent/task-b --no-open
+hd new agent/task-c --no-open
+```
+
+`--no-open` still delegates worktree creation to Herdr, so Herdr's configured worktree path and branch/path rules remain authoritative. The workspace is created with `--no-focus` and immediately closed after the checkout is ready, leaving the Git worktree intact.
+
+Later, open only the checkout you actually want to work in:
+
+```bash
+hd open agent/task-b
+```
+
+`--layout` cannot be combined with `--no-open`, because no layout is applied to a workspace that is immediately closed.
+
+```bash
+hd new feature/login --no-open --layout review
+# ERROR
+```
+
+## Opening an existing worktree
+
+```bash
+hd open feature/login
+```
+
+- existing worktree → open/focus it in Herdr
+- no worktree → refuse and suggest `hd new`
 
 ## Layouts
 
@@ -118,7 +167,7 @@ Common fields:
 | `cwd` | no | Working directory used when Herdr creates the pane. `hd` rewrites pane `cwd` to the active repo/worktree root when applying a layout. |
 | `command` | no | Command to launch, represented as an **argv array**. |
 | `env` | no | Environment variables for the launched process as a JSON object. |
-| `pane_id` | no | Runtime Herdr pane id. It may appear in exported data, but it is session-specific and should not be hand-authored. `hd layout save` removes it. |
+| `pane_id` | no | Runtime Herdr pane id. It is session-specific; `hd layout save` removes it. |
 
 Minimal pane:
 
@@ -239,23 +288,6 @@ When `hd` applies the layout, every pane's `cwd` is rewritten to the active chec
 
 Herdr's declarative layout restore can recreate structure, labels, cwd, env, and optional argv commands. It does not restore live PTYs, scrollback, or already-running processes.
 
-## Worktree behavior
-
-```bash
-hd new feature/login --base main
-```
-
-- branch missing → create branch + worktree
-- branch exists but has no worktree → create worktree from existing branch
-- branch already has a worktree → refuse and suggest `hd open`
-
-```bash
-hd open feature/login
-```
-
-- existing worktree → open/focus it in Herdr
-- no worktree → refuse and suggest `hd new`
-
 ## Closing a Herdr workspace
 
 From inside a Herdr workspace:
@@ -287,6 +319,14 @@ prefix + Shift+D
 ```
 
 To actually delete a linked Git checkout, use `hd rm` instead. `hd close` never removes a Git worktree.
+
+## Removing a worktree
+
+```bash
+hd rm feature/login
+```
+
+`hd rm` removes the linked checkout but never deletes the Git branch. It does not use `--force`; Git remains the final safety check for modified or untracked files.
 
 ## Herdr layout API
 
