@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-HD_VERSION="0.6.0"
+HD_VERSION="0.6.1"
 CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 LAYOUT_DIR="${HD_LAYOUT_DIR:-$CONFIG_HOME/herdr/layouts}"
 DEFAULT_LAYOUT="${HD_DEFAULT_LAYOUT:-dev}"
@@ -549,9 +549,13 @@ list_workspaces() {
 confirm_action() {
   local prompt="$1" answer
   printf '%s' "$prompt" >&2
-  IFS= read -r answer || return 1
+  if ! IFS= read -r -s -n 1 answer; then
+    printf '\n' >&2
+    return 1
+  fi
+  printf '\n' >&2
   case "$answer" in
-    y|Y|yes|YES|Yes) return 0 ;;
+    y|Y) return 0 ;;
     *) return 1 ;;
   esac
 }
