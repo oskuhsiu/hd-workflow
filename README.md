@@ -10,7 +10,7 @@ Git checkout / worktree
 + reusable Herdr layout
 ```
 
-Current version: **0.6.0**
+Current version: **0.6.1**
 
 ## Install
 
@@ -296,7 +296,7 @@ From inside a Herdr workspace:
 hd close
 ```
 
-`hd` asks for confirmation before closing the current workspace. This closes **Herdr state only** and keeps the Git checkout/worktree intact.
+`hd` asks for confirmation before closing the current workspace. Press **`y` or `Y` once** to confirm immediately; Enter is not required. Any other key cancels. This closes **Herdr state only** and keeps the Git checkout/worktree intact.
 
 If the current workspace is a primary workspace with linked-worktree workspaces still open, Herdr requires explicit group intent. `hd` detects `workspace_group_close_required` and asks for a second confirmation before closing the whole Herdr workspace group.
 
