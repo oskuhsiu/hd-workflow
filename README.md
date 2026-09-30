@@ -10,7 +10,7 @@ Git checkout / worktree
 + reusable Herdr layout
 ```
 
-Current version: **0.6.1**
+Current version: **0.6.2**
 
 ## Install
 
@@ -296,7 +296,7 @@ From inside a Herdr workspace:
 hd close
 ```
 
-`hd` asks for confirmation before closing the current workspace. Press **`y` or `Y` once** to confirm immediately; Enter is not required. Any other key cancels. This closes **Herdr state only** and keeps the Git checkout/worktree intact.
+`hd` asks for confirmation before closing the current workspace. Press **`y` or `Y` once** to confirm immediately; Enter is not required. Any other key cancels. After confirmation, `hd` lists panes only in the current `HERDR_WORKSPACE_ID`, closes panes detected as **Codex**, then closes the workspace. Codex panes in other workspaces are not targeted. Closing a Codex pane lets Herdr shut down that pane's PTY/process session before the workspace is removed. The Git checkout/worktree is kept intact.
 
 If the current workspace is a primary workspace with linked-worktree workspaces still open, Herdr requires explicit group intent. `hd` detects `workspace_group_close_required` and asks for a second confirmation before closing the whole Herdr workspace group.
 
