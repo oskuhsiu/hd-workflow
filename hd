@@ -560,6 +560,33 @@ confirm_action() {
   esac
 }
 
+close_codex_pane() {
+  local pane_id="$1" response code
+
+  if response="$(herdr pane close "$pane_id")"; then
+    json_check_error "$response" "pane.close" || return 1
+    return
+  fi
+
+  if ! printf '%s\n' "$response" | jq -e . >/dev/null 2>&1; then
+    printf '[hd] ERROR: pane.close command failed\n' >&2
+    [[ -n "$response" ]] && printf '%s\n' "$response" >&2
+    return 1
+  fi
+
+  code="$(printf '%s\n' "$response" | jq -r '.error.code // empty')"
+  case "$code" in
+    pane_not_found|workspace_not_found)
+      return 0
+      ;;
+    *)
+      printf '[hd] ERROR: pane.close failed\n' >&2
+      printf '%s\n' "$response" | jq '.error // .' >&2
+      return 1
+      ;;
+  esac
+}
+
 close_workspace_codex_panes() {
   local workspace_id="$1" panes pane_ids pane_id
 
@@ -586,7 +613,7 @@ close_workspace_codex_panes() {
   while IFS= read -r pane_id; do
     [[ -n "$pane_id" ]] || continue
     log "Closing Codex pane: $pane_id"
-    herdr_json "pane.close" pane close "$pane_id" >/dev/null || return 1
+    close_codex_pane "$pane_id" || return 1
   done <<< "$pane_ids"
 }
 
