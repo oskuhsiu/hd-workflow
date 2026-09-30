@@ -570,8 +570,10 @@ close_workspace_codex_panes() {
     return 1
   fi
 
-  pane_ids="$(printf '%s\n' "$panes" | jq -r '
+  pane_ids="$(printf '%s\n' "$panes" | jq -r --arg workspace "$workspace_id" '
     .result.panes[]
+    | select((.workspace_id // "") == $workspace)
+    | select((.pane_id // "") != "")
     | select(
         ((.agent // "") | ascii_downcase) == "codex"
         or ((.display_agent // "") | ascii_downcase) == "codex"
