@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-HD_VERSION="0.6.1"
+HD_VERSION="0.6.2"
 CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 LAYOUT_DIR="${HD_LAYOUT_DIR:-$CONFIG_HOME/herdr/layouts}"
 DEFAULT_LAYOUT="${HD_DEFAULT_LAYOUT:-dev}"
@@ -560,6 +560,34 @@ confirm_action() {
   esac
 }
 
+close_workspace_codex_panes() {
+  local workspace_id="$1" panes pane_ids pane_id
+
+  panes="$(herdr_json "pane.list" pane list --workspace "$workspace_id")" || return 1
+  if ! printf '%s\n' "$panes" | jq -e '.result.panes | type == "array"' >/dev/null 2>&1; then
+    warn "Unexpected pane.list response schema"
+    printf '%s\n' "$panes" | jq >&2
+    return 1
+  fi
+
+  pane_ids="$(printf '%s\n' "$panes" | jq -r '
+    .result.panes[]
+    | select(
+        ((.agent // "") | ascii_downcase) == "codex"
+        or ((.display_agent // "") | ascii_downcase) == "codex"
+      )
+    | .pane_id
+  ')"
+
+  [[ -n "$pane_ids" ]] || return 0
+
+  while IFS= read -r pane_id; do
+    [[ -n "$pane_id" ]] || continue
+    log "Closing Codex pane: $pane_id"
+    herdr_json "pane.close" pane close "$pane_id" >/dev/null || return 1
+  done <<< "$pane_ids"
+}
+
 close_workspace() {
   local workspace_id="${HERDR_WORKSPACE_ID:-}" response code
   [[ -n "$workspace_id" ]] || die "Not inside a Herdr workspace"
@@ -571,6 +599,11 @@ close_workspace() {
     log "Cancelled"
     return
   fi
+
+  close_workspace_codex_panes "$workspace_id" || {
+    warn "Codex pane cleanup failed; workspace was left open."
+    return 1
+  }
 
   if response="$(herdr workspace close "$workspace_id")"; then
     json_check_error "$response" "workspace.close" || return 1
@@ -584,6 +617,10 @@ close_workspace() {
   fi
 
   code="$(printf '%s\n' "$response" | jq -r '.error.code // empty')"
+  if [[ "$code" == "workspace_not_found" ]]; then
+    log "Workspace already closed after Codex pane cleanup."
+    return
+  fi
   if [[ "$code" != "workspace_group_close_required" ]]; then
     printf '[hd] ERROR: workspace.close failed\n' >&2
     printf '%s\n' "$response" | jq '.error // .' >&2
