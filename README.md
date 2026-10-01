@@ -10,7 +10,7 @@ Git checkout / worktree
 + reusable Herdr layout
 ```
 
-Current version: **0.7.2**
+Current version: **0.7.3**
 
 ## Install
 
@@ -357,7 +357,7 @@ hd close -y
 
 `-y` / `--yes` skips both the normal close confirmation and, when Herdr requires a whole worktree-group close, the second group confirmation.
 
-Without `-y` / `--yes`, `hd` asks for confirmation before closing the current workspace. Press **`y` or `Y` once** to confirm immediately; Enter is not required. Any other key cancels. After confirmation, `hd` resolves the live workspace using the strongest identity available. It first tries `herdr pane current --current`. When invoked from Codex's `!` shell, where Herdr pane/workspace environment variables may not be inherited, it matches Codex's injected `CODEX_THREAD_ID` against Herdr pane `agent_session.value`. It then validates `HERDR_WORKSPACE_ID` if present, and finally falls back to a unique workspace cwd match. The current cleanup policy targets **Codex** panes only. Closing a Codex pane lets Herdr shut down that pane's PTY/process session before the workspace is removed. When `hd close` is invoked **from inside Codex itself** (for example `! hd close -y`), the `CODEX_THREAD_ID` match identifies the caller pane and `hd` deliberately skips that pane during pre-cleanup so it does not kill its own command before `workspace close` runs. The final workspace close then owns shutdown of the caller pane. The Git checkout/worktree is kept intact.
+Without `-y` / `--yes`, `hd` asks for confirmation before closing the current workspace. Press **`y` or `Y` once** to confirm immediately; Enter is not required. Any other key cancels. After confirmation, `hd` resolves the live workspace using the strongest identity available. It first tries `herdr pane current --current`. When invoked from Codex's `!` shell, where Herdr pane/workspace environment variables may not be inherited, it first matches Codex's injected `CODEX_THREAD_ID` against Herdr pane `agent_session.value`. If the Herdr Codex integration has not reported a session ID, it falls back to a **unique Codex pane whose `foreground_cwd` or pane `cwd` is inside the current Git root**. If Codex is detected but no unique caller pane can be identified, `hd close` fails closed instead of guessing from a stale workspace ID. Outside Codex, `hd` can still validate `HERDR_WORKSPACE_ID` and fall back to a unique workspace cwd match. The current cleanup policy targets **Codex** panes only. Closing a Codex pane lets Herdr shut down that pane's PTY/process session before the workspace is removed. When `hd close` is invoked **from inside Codex itself** (for example `! hd close -y`), the `CODEX_THREAD_ID` match identifies the caller pane and `hd` deliberately skips that pane during pre-cleanup so it does not kill its own command before `workspace close` runs. The final workspace close then owns shutdown of the caller pane. The Git checkout/worktree is kept intact.
 
 If the current workspace is a primary workspace with linked-worktree workspaces still open, Herdr requires explicit group intent. `hd` detects `workspace_group_close_required` and asks for a second confirmation before closing the whole Herdr workspace group.
 
