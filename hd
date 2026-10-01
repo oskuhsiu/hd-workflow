@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-HD_VERSION="0.6.3"
+HD_VERSION="0.7.0"
 CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 LAYOUT_DIR="${HD_LAYOUT_DIR:-$CONFIG_HOME/herdr/layouts}"
 DEFAULT_LAYOUT="${HD_DEFAULT_LAYOUT:-dev}"
@@ -142,6 +142,17 @@ workspace_list_json() {
   response="$(herdr_json "workspace.list" workspace list)" || return 1
   printf '%s\n' "$response" | jq -e '.result.workspaces | type == "array"' >/dev/null 2>&1 || {
     warn "Unexpected workspace.list response schema"
+    printf '%s\n' "$response" | jq >&2
+    return 1
+  }
+  printf '%s\n' "$response"
+}
+
+pane_list_json() {
+  local response
+  response="$(herdr_json "pane.list" pane list)" || return 1
+  printf '%s\n' "$response" | jq -e '.result.panes | type == "array"' >/dev/null 2>&1 || {
+    warn "Unexpected pane.list response schema"
     printf '%s\n' "$response" | jq >&2
     return 1
   }
@@ -520,28 +531,107 @@ open_worktree() {
 }
 
 list_workspaces() {
-  local worktrees ws_json herdr_known=1 count i branch path workspace_id status
+  local json_output="${1:-0}"
+  local worktrees ws_json panes_json herdr_known=1 panes_known=1
+  local workspaces='[]' panes='[]' result count i branch path status agent_summary
+
   git_root >/dev/null || die "Not inside a Git repository"
   worktrees="$(git_worktrees_json)"
-  if ! ws_json="$(workspace_list_json)"; then
+
+  if ws_json="$(workspace_list_json)"; then
+    workspaces="$(printf '%s\n' "$ws_json" | jq -c '.result.workspaces')"
+    if panes_json="$(pane_list_json)"; then
+      panes="$(printf '%s\n' "$panes_json" | jq -c '.result.panes')"
+    else
+      panes_known=0
+      warn "Could not read Herdr pane state; AGENT data will show as unknown"
+    fi
+  else
     herdr_known=0
-    warn "Could not read Herdr workspace state; HERDR column will show '?'"
-    ws_json='{}'
+    panes_known=0
+    warn "Could not read Herdr workspace state; HERDR/AGENT data will show as unknown"
   fi
 
-  printf '\n%-28s %-8s %s\n' "BRANCH" "HERDR" "PATH"
-  printf '%-28s %-8s %s\n' "----------------------------" "--------" "----"
-  count="$(printf '%s\n' "$worktrees" | jq 'length')"
+  result="$(jq -nc \
+    --argjson worktrees "$worktrees" \
+    --argjson workspaces "$workspaces" \
+    --argjson panes "$panes" \
+    --argjson herdr_known "$herdr_known" \
+    --argjson panes_known "$panes_known" '
+    {
+      schema_version: 1,
+      worktrees: (
+        $worktrees
+        | to_entries
+        | map(
+            .key as $index
+            | .value as $wt
+            | ($workspaces
+               | map(select((.cwd // "") == ($wt.path // "")))
+               | .[0].workspace_id // null
+              ) as $workspace_id
+            | {
+                branch: ($wt.branch // "(detached)"),
+                path: $wt.path,
+                primary: ($index == 0),
+                herdr: (
+                  if $herdr_known == 0 then "unknown"
+                  elif $workspace_id != null then "open"
+                  else "closed"
+                  end
+                ),
+                workspace_id: $workspace_id,
+                agents_known: (
+                  if $herdr_known == 0 then false
+                  elif $workspace_id == null then true
+                  else ($panes_known == 1)
+                  end
+                ),
+                agents: (
+                  if $herdr_known == 1 and $workspace_id != null and $panes_known == 1 then
+                    [
+                      $panes[]
+                      | select((.workspace_id // "") == $workspace_id)
+                      | select((.agent // "") != "" or (.display_agent // "") != "")
+                      | {
+                          pane_id: .pane_id,
+                          agent: (.agent // null),
+                          display_agent: (.display_agent // .agent // null),
+                          status: (.agent_status // "unknown")
+                        }
+                    ]
+                  else
+                    []
+                  end
+                )
+              }
+          )
+      )
+    }
+  ')" || die "Failed to build workspace status"
+
+  if (( json_output )); then
+    printf '%s\n' "$result" | jq .
+    return
+  fi
+
+  printf '\n%-28s %-8s %-28s %s\n' "BRANCH" "HERDR" "AGENT" "PATH"
+  printf '%-28s %-8s %-28s %s\n' "----------------------------" "--------" "----------------------------" "----"
+  count="$(printf '%s\n' "$result" | jq '.worktrees | length')"
   for (( i=0; i<count; i++ )); do
-    branch="$(printf '%s\n' "$worktrees" | jq -r ".[$i].branch // \"(detached)\"")"
-    path="$(printf '%s\n' "$worktrees" | jq -r ".[$i].path")"
-    if (( herdr_known )); then
-      workspace_id="$(find_workspace_id_by_cwd "$ws_json" "$path")"
-      [[ -n "$workspace_id" ]] && status="open" || status="-"
-    else
-      status="?"
-    fi
-    printf '%-28s %-8s %s\n' "$branch" "$status" "$path"
+    branch="$(printf '%s\n' "$result" | jq -r ".worktrees[$i].branch")"
+    path="$(printf '%s\n' "$result" | jq -r ".worktrees[$i].path")"
+    status="$(printf '%s\n' "$result" | jq -r ".worktrees[$i].herdr")"
+    agent_summary="$(printf '%s\n' "$result" | jq -r ".worktrees[$i] |
+      if .herdr == \"unknown\" or (.agents_known | not) then \"?\"
+      elif (.agents | length) == 0 then \"-\"
+      else
+        [.agents[] | ((.display_agent // .agent // \"agent\") + \":\" + (.status // \"unknown\"))]
+        | unique
+        | join(\",\")
+      end
+    ")"
+    printf '%-28s %-8s %-28s %s\n' "$branch" "$status" "$agent_summary" "$path"
   done
   printf '\n'
 }
@@ -560,7 +650,7 @@ confirm_action() {
   esac
 }
 
-close_codex_pane() {
+close_agent_pane() {
   local pane_id="$1" response code
 
   if response="$(herdr pane close "$pane_id")"; then
@@ -587,7 +677,7 @@ close_codex_pane() {
   esac
 }
 
-close_workspace_codex_panes() {
+cleanup_workspace_agents() {
   local workspace_id="$1" panes pane_ids pane_id
 
   panes="$(herdr_json "pane.list" pane list --workspace "$workspace_id")" || return 1
@@ -597,7 +687,7 @@ close_workspace_codex_panes() {
     return 1
   fi
 
-  pane_ids="$(printf '%s\n' "$panes" | jq -r --arg workspace "$workspace_id" '
+  # Cleanup policy currently targets Codex only.\n  pane_ids="$(printf '%s\n' "$panes" | jq -r --arg workspace "$workspace_id" '
     .result.panes[]
     | select((.workspace_id // "") == $workspace)
     | select((.pane_id // "") != "")
@@ -612,8 +702,8 @@ close_workspace_codex_panes() {
 
   while IFS= read -r pane_id; do
     [[ -n "$pane_id" ]] || continue
-    log "Closing Codex pane: $pane_id"
-    close_codex_pane "$pane_id" || return 1
+    log "Closing workspace agent pane: $pane_id (codex)"
+    close_agent_pane "$pane_id" || return 1
   done <<< "$pane_ids"
 }
 
@@ -631,8 +721,8 @@ close_workspace() {
     fi
   fi
 
-  close_workspace_codex_panes "$workspace_id" || {
-    warn "Codex pane cleanup failed; workspace was left open."
+  cleanup_workspace_agents "$workspace_id" || {
+    warn "Workspace agent cleanup failed; workspace was left open."
     return 1
   }
 
@@ -649,7 +739,7 @@ close_workspace() {
 
   code="$(printf '%s\n' "$response" | jq -r '.error.code // empty')"
   if [[ "$code" == "workspace_not_found" ]]; then
-    log "Workspace already closed after Codex pane cleanup."
+    log "Workspace already closed after agent cleanup."
     return
   fi
   if [[ "$code" != "workspace_group_close_required" ]]; then
@@ -721,8 +811,81 @@ remove_worktree() {
   log "Removed worktree. Branch was NOT deleted: $branch"
 }
 
+herdr_help_has_subcommand() {
+  local help_text="$1" subcommand="$2"
+  printf '%s\n' "$help_text" | grep -Eq "(^|[[:space:]])${subcommand}([[:space:]]|$)"
+}
+
+doctor_herdr_capabilities() {
+  local pane_help workspace_help worktree_help api_schema capability_missing=0
+  local schema_known=0
+
+  pane_help="$(herdr pane --help 2>&1 || true)"
+  workspace_help="$(herdr workspace --help 2>&1 || true)"
+  worktree_help="$(herdr worktree --help 2>&1 || true)"
+
+  if api_schema="$(herdr api schema --json 2>/dev/null)"; then
+    schema_known=1
+  else
+    api_schema=""
+  fi
+
+  printf '\nHerdr capabilities:\n'
+
+  if herdr_help_has_subcommand "$pane_help" "list"; then
+    printf '%-22s %s\n' "pane list" "ok"
+  else
+    printf '%-22s %s\n' "pane list" "MISSING"
+    capability_missing=1
+  fi
+
+  if herdr_help_has_subcommand "$pane_help" "close"; then
+    printf '%-22s %s\n' "pane close" "ok"
+  else
+    printf '%-22s %s\n' "pane close" "MISSING"
+    capability_missing=1
+  fi
+
+  if herdr_help_has_subcommand "$workspace_help" "close"; then
+    printf '%-22s %s\n' "workspace close" "ok"
+  else
+    printf '%-22s %s\n' "workspace close" "MISSING"
+    capability_missing=1
+  fi
+
+  local subcommand
+  for subcommand in create open remove; do
+    if herdr_help_has_subcommand "$worktree_help" "$subcommand"; then
+      printf '%-22s %s\n' "worktree $subcommand" "ok"
+    else
+      printf '%-22s %s\n' "worktree $subcommand" "MISSING"
+      capability_missing=1
+    fi
+  done
+
+  if (( schema_known )); then
+    if printf '%s\n' "$api_schema" | grep -Fq '"layout.apply"'; then
+      printf '%-22s %s\n' "layout.apply" "ok"
+    else
+      printf '%-22s %s\n' "layout.apply" "MISSING"
+      capability_missing=1
+    fi
+    if printf '%s\n' "$api_schema" | grep -Fq '"layout.export"'; then
+      printf '%-22s %s\n' "layout.export" "ok"
+    else
+      printf '%-22s %s\n' "layout.export" "MISSING"
+      capability_missing=1
+    fi
+  else
+    printf '%-22s %s\n' "layout.apply" "unknown (API schema unavailable)"
+    printf '%-22s %s\n' "layout.export" "unknown (API schema unavailable)"
+  fi
+
+  (( capability_missing == 0 ))
+}
+
 doctor() {
-  local tool root found_missing=0 sock any=0 f
+  local tool root found_missing=0 capability_missing=0 sock any=0 f
   printf 'hd %s\n\n' "$HD_VERSION"
   for tool in git herdr jq python3; do
     if command -v "$tool" >/dev/null 2>&1; then
@@ -749,11 +912,14 @@ doctor() {
     done
   fi
   (( any )) || printf '  (none)\n'
+  if command -v herdr >/dev/null 2>&1; then
+    doctor_herdr_capabilities || capability_missing=1
+  fi
   if command -v git >/dev/null 2>&1 && git_root >/dev/null 2>&1; then
     printf '\nStale worktree metadata (dry-run only):\n'
     git worktree prune --dry-run --verbose 2>/dev/null || git worktree prune -n -v 2>/dev/null || true
   fi
-  (( found_missing == 0 )) || return 1
+  (( found_missing == 0 && capability_missing == 0 )) || return 1
 }
 
 usage() {
@@ -765,7 +931,7 @@ Usage:
   hd new <branch> [--base REF] [--layout NAME] [--no-open]
                                         Create a new worktree; keep workspace closed with --no-open
   hd open <branch> [--layout NAME]      Open an existing worktree
-  hd list                               List checkouts and Herdr state
+  hd list [--json]                      List checkouts, Herdr state, and agents
   hd close [-y|--yes]                   Close current Herdr workspace
   hd rm [branch|path]                   Remove linked worktree; never branch
   hd layout save [name]                 Save current Herdr tab layout globally
@@ -819,9 +985,15 @@ main() {
       open_worktree "$@"
       ;;
     list)
-      (( $# == 0 )) || die "Usage: hd list"
+      local list_json=0
+      while (( $# )); do
+        case "$1" in
+          --json) list_json=1; shift ;;
+          *) die "Usage: hd list [--json]" ;;
+        esac
+      done
       require_deps
-      list_workspaces
+      list_workspaces "$list_json"
       ;;
     close)
       local close_yes=0
