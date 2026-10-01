@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-HD_VERSION="0.6.2"
+HD_VERSION="0.6.3"
 CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 LAYOUT_DIR="${HD_LAYOUT_DIR:-$CONFIG_HOME/herdr/layouts}"
 DEFAULT_LAYOUT="${HD_DEFAULT_LAYOUT:-dev}"
@@ -618,15 +618,17 @@ close_workspace_codex_panes() {
 }
 
 close_workspace() {
-  local workspace_id="${HERDR_WORKSPACE_ID:-}" response code
+  local assume_yes="${1:-0}" workspace_id="${HERDR_WORKSPACE_ID:-}" response code
   [[ -n "$workspace_id" ]] || die "Not inside a Herdr workspace"
 
   log "Close current Herdr workspace?"
   log "  workspace: $workspace_id"
   log "  cwd: ${PWD:-unknown}"
-  if ! confirm_action "Continue? [y/N] "; then
-    log "Cancelled"
-    return
+  if (( assume_yes == 0 )); then
+    if ! confirm_action "Continue? [y/N] "; then
+      log "Cancelled"
+      return
+    fi
   fi
 
   close_workspace_codex_panes "$workspace_id" || {
@@ -658,9 +660,11 @@ close_workspace() {
 
   warn "This workspace has linked worktree workspaces."
   warn "Closing it requires closing the entire Herdr group."
-  if ! confirm_action "Close the whole group? [y/N] "; then
-    log "Cancelled"
-    return
+  if (( assume_yes == 0 )); then
+    if ! confirm_action "Close the whole group? [y/N] "; then
+      log "Cancelled"
+      return
+    fi
   fi
 
   herdr_json "workspace.close" workspace close "$workspace_id" --group >/dev/null \
@@ -762,7 +766,7 @@ Usage:
                                         Create a new worktree; keep workspace closed with --no-open
   hd open <branch> [--layout NAME]      Open an existing worktree
   hd list                               List checkouts and Herdr state
-  hd close                              Close current Herdr workspace
+  hd close [-y|--yes]                   Close current Herdr workspace
   hd rm [branch|path]                   Remove linked worktree; never branch
   hd layout save [name]                 Save current Herdr tab layout globally
   hd layout init [name]                 Copy global layout into repo-local .herdr
@@ -774,7 +778,7 @@ Rules:
   hd new    requires that the branch is not already checked out in a worktree.
   --no-open creates the worktree but leaves its Herdr workspace closed.
   hd open   requires that the branch already has a Git worktree checkout.
-  hd close  closes Herdr state only; it never removes the Git worktree.
+  hd close  closes Herdr state only; -y/--yes skips close confirmations.
   --layout  is a bootstrap layout only; existing Herdr workspaces are focused unchanged.
   Layouts   resolve repo/.herdr/layouts first, then ~/.config/herdr/layouts.
 
@@ -820,10 +824,16 @@ main() {
       list_workspaces
       ;;
     close)
-      (( $# == 0 )) || die "Usage: hd close"
+      local close_yes=0
+      while (( $# )); do
+        case "$1" in
+          -y|--yes) close_yes=1; shift ;;
+          *) die "Usage: hd close [-y|--yes]" ;;
+        esac
+      done
       need herdr
       need jq
-      close_workspace
+      close_workspace "$close_yes"
       ;;
     rm)
       (( $# <= 1 )) || die "Usage: hd rm [branch|path]"
