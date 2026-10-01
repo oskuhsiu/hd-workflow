@@ -10,7 +10,7 @@ Git checkout / worktree
 + reusable Herdr layout
 ```
 
-Current version: **0.6.3**
+Current version: **0.7.0**
 
 ## Install
 
@@ -35,7 +35,7 @@ Make sure `~/.local/bin` is in `PATH`.
 hd [--layout NAME]
 hd new <branch> [--base REF] [--layout NAME] [--no-open]
 hd open <branch> [--layout NAME]
-hd list
+hd list [--json]
 hd close [-y|--yes]
 hd rm [branch|path]
 hd layout save [name]
@@ -109,6 +109,58 @@ hd open feature/login
 
 - existing worktree → open/focus it in Herdr
 - no worktree → refuse and suggest `hd new`
+
+## Listing worktrees and agents
+
+Human-readable output:
+
+```bash
+hd list
+```
+
+Example:
+
+```text
+BRANCH                       HERDR    AGENT                        PATH
+main                         open     Codex:working                /repo
+feature/foo                  closed   -                            /worktrees/foo
+```
+
+The `AGENT` column is derived from Herdr pane metadata. Multiple agents are comma-separated. If Herdr or pane state cannot be read, `?` is shown instead of pretending the state is known.
+
+For agents and scripts:
+
+```bash
+hd list --json
+```
+
+The JSON surface is versioned independently with `schema_version`:
+
+```json
+{
+  "schema_version": 1,
+  "worktrees": [
+    {
+      "branch": "main",
+      "path": "/repo",
+      "primary": true,
+      "herdr": "open",
+      "workspace_id": "w1",
+      "agents_known": true,
+      "agents": [
+        {
+          "pane_id": "w1:p1",
+          "agent": "codex",
+          "display_agent": "Codex",
+          "status": "working"
+        }
+      ]
+    }
+  ]
+}
+```
+
+`herdr` is one of `open`, `closed`, or `unknown`. `agents_known=false` means the empty `agents` array must not be interpreted as proof that no agent is running.
 
 ## Layouts
 
@@ -305,7 +357,7 @@ hd close -y
 
 `-y` / `--yes` skips both the normal close confirmation and, when Herdr requires a whole worktree-group close, the second group confirmation.
 
-Without `-y` / `--yes`, `hd` asks for confirmation before closing the current workspace. Press **`y` or `Y` once** to confirm immediately; Enter is not required. Any other key cancels. After confirmation, `hd` lists panes only in the current `HERDR_WORKSPACE_ID`, closes panes detected as **Codex**, then closes the workspace. Codex panes in other workspaces are not targeted. Closing a Codex pane lets Herdr shut down that pane's PTY/process session before the workspace is removed. The Git checkout/worktree is kept intact.
+Without `-y` / `--yes`, `hd` asks for confirmation before closing the current workspace. Press **`y` or `Y` once** to confirm immediately; Enter is not required. Any other key cancels. After confirmation, `hd` runs a workspace-scoped agent cleanup policy, then closes the workspace. The current policy targets **Codex** panes only. Pane selection is constrained to the current `HERDR_WORKSPACE_ID`, so Codex panes in other workspaces are not targeted. Closing a Codex pane lets Herdr shut down that pane's PTY/process session before the workspace is removed. The Git checkout/worktree is kept intact.
 
 If the current workspace is a primary workspace with linked-worktree workspaces still open, Herdr requires explicit group intent. `hd` detects `workspace_group_close_required` and asks for a second confirmation before closing the whole Herdr workspace group.
 
@@ -336,6 +388,27 @@ hd rm feature/login
 ```
 
 `hd rm` removes the linked checkout but never deletes the Git branch. It does not use `--force`; Git remains the final safety check for modified or untracked files.
+
+## Doctor / compatibility checks
+
+```bash
+hd doctor
+```
+
+In addition to dependency, socket, layout, repo, and stale-worktree checks, `doctor` verifies the Herdr CLI capabilities that `hd` relies on:
+
+```text
+pane list
+pane close
+workspace close
+worktree create
+worktree open
+worktree remove
+layout.apply
+layout.export
+```
+
+Missing CLI capabilities make `doctor` fail. Layout API methods are verified through `herdr api schema --json` when available; on older Herdr versions without that schema command they are reported as `unknown` rather than falsely marked missing.
 
 ## Herdr layout API
 
