@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-HD_VERSION="0.7.0"
+HD_VERSION="0.7.1"
 CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 LAYOUT_DIR="${HD_LAYOUT_DIR:-$CONFIG_HOME/herdr/layouts}"
 DEFAULT_LAYOUT="${HD_DEFAULT_LAYOUT:-dev}"
@@ -650,6 +650,48 @@ confirm_action() {
   esac
 }
 
+resolve_close_context() {
+  local response workspace_id pane_id ws_json root matches count
+
+  if [[ -n "${HERDR_PANE_ID:-}" ]]; then
+    if response="$(herdr pane current --current 2>/dev/null)"; then
+      if printf '%s\n' "$response" | jq -e '.error == null and .result.pane.workspace_id != null and .result.pane.pane_id != null' >/dev/null 2>&1; then
+        workspace_id="$(printf '%s\n' "$response" | jq -r '.result.pane.workspace_id')"
+        pane_id="$(printf '%s\n' "$response" | jq -r '.result.pane.pane_id')"
+        jq -nc --arg workspace "$workspace_id" --arg pane "$pane_id"           '{workspace_id:$workspace,pane_id:$pane,source:"pane_current"}'
+        return
+      fi
+    fi
+  fi
+
+  ws_json="$(workspace_list_json)" || return 1
+
+  if [[ -n "${HERDR_WORKSPACE_ID:-}" ]]; then
+    workspace_id="$(printf '%s\n' "$ws_json" | jq -r --arg workspace "$HERDR_WORKSPACE_ID" '
+      .result.workspaces
+      | map(select((.workspace_id // "") == $workspace))
+      | .[0].workspace_id // empty
+    ')"
+    if [[ -n "$workspace_id" ]]; then
+      jq -nc --arg workspace "$workspace_id"         '{workspace_id:$workspace,pane_id:null,source:"workspace_env"}'
+      return
+    fi
+  fi
+
+  root="$(git_root 2>/dev/null || pwd -P)"
+  matches="$(printf '%s\n' "$ws_json" | jq -c --arg cwd "$root" '
+    [.result.workspaces[] | select((.cwd // "") == $cwd)]
+  ')"
+  count="$(printf '%s\n' "$matches" | jq 'length')"
+  if (( count == 1 )); then
+    workspace_id="$(printf '%s\n' "$matches" | jq -r '.[0].workspace_id')"
+    jq -nc --arg workspace "$workspace_id"       '{workspace_id:$workspace,pane_id:null,source:"cwd"}'
+    return
+  fi
+
+  return 1
+}
+
 close_agent_pane() {
   local pane_id="$1" response code
 
@@ -678,7 +720,7 @@ close_agent_pane() {
 }
 
 cleanup_workspace_agents() {
-  local workspace_id="$1" panes pane_ids pane_id
+  local workspace_id="$1" skip_pane_id="${2:-}" panes pane_ids pane_id
 
   panes="$(herdr_json "pane.list" pane list --workspace "$workspace_id")" || return 1
   if ! printf '%s\n' "$panes" | jq -e '.result.panes | type == "array"' >/dev/null 2>&1; then
@@ -688,10 +730,11 @@ cleanup_workspace_agents() {
   fi
 
   # Cleanup policy currently targets Codex only.
-  pane_ids="$(printf '%s\n' "$panes" | jq -r --arg workspace "$workspace_id" '
+  pane_ids="$(printf '%s\n' "$panes" | jq -r --arg workspace "$workspace_id" --arg skip_pane "$skip_pane_id" '
     .result.panes[]
     | select((.workspace_id // "") == $workspace)
     | select((.pane_id // "") != "")
+    | select((.pane_id // "") != $skip_pane)
     | select(
         ((.agent // "") | ascii_downcase) == "codex"
         or ((.display_agent // "") | ascii_downcase) == "codex"
@@ -709,12 +752,18 @@ cleanup_workspace_agents() {
 }
 
 close_workspace() {
-  local assume_yes="${1:-0}" workspace_id="${HERDR_WORKSPACE_ID:-}" response code
-  [[ -n "$workspace_id" ]] || die "Not inside a Herdr workspace"
+  local assume_yes="${1:-0}" context workspace_id caller_pane_id source response code
+
+  context="$(resolve_close_context)" || die "Could not resolve the current Herdr workspace"
+  workspace_id="$(printf '%s\n' "$context" | jq -r '.workspace_id // empty')"
+  caller_pane_id="$(printf '%s\n' "$context" | jq -r '.pane_id // empty')"
+  source="$(printf '%s\n' "$context" | jq -r '.source // "unknown"')"
+  [[ -n "$workspace_id" ]] || die "Could not resolve the current Herdr workspace"
 
   log "Close current Herdr workspace?"
   log "  workspace: $workspace_id"
   log "  cwd: ${PWD:-unknown}"
+  [[ "$source" == "pane_current" ]] || warn "Resolved workspace via $source because pane identity was unavailable."
   if (( assume_yes == 0 )); then
     if ! confirm_action "Continue? [y/N] "; then
       log "Cancelled"
@@ -722,7 +771,7 @@ close_workspace() {
     fi
   fi
 
-  cleanup_workspace_agents "$workspace_id" || {
+  cleanup_workspace_agents "$workspace_id" "$caller_pane_id" || {
     warn "Workspace agent cleanup failed; workspace was left open."
     return 1
   }
@@ -844,6 +893,13 @@ doctor_herdr_capabilities() {
     printf '%-22s %s\n' "pane close" "ok"
   else
     printf '%-22s %s\n' "pane close" "MISSING"
+    capability_missing=1
+  fi
+
+  if herdr_help_has_subcommand "$pane_help" "current"; then
+    printf '%-22s %s\n' "pane current" "ok"
+  else
+    printf '%-22s %s\n' "pane current" "MISSING"
     capability_missing=1
   fi
 
