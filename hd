@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-HD_VERSION="0.7.2"
+HD_VERSION="0.7.3"
 CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 LAYOUT_DIR="${HD_LAYOUT_DIR:-$CONFIG_HOME/herdr/layouts}"
 DEFAULT_LAYOUT="${HD_DEFAULT_LAYOUT:-dev}"
@@ -651,21 +651,25 @@ confirm_action() {
 }
 
 resolve_close_context() {
-  local response workspace_id pane_id panes_json session_matches ws_json root matches count
+  local response workspace_id pane_id panes_json session_matches cwd_matches
+  local ws_json root matches count
 
   if [[ -n "${HERDR_PANE_ID:-}" ]]; then
     if response="$(herdr pane current --current 2>/dev/null)"; then
       if printf '%s\n' "$response" | jq -e '.error == null and .result.pane.workspace_id != null and .result.pane.pane_id != null' >/dev/null 2>&1; then
         workspace_id="$(printf '%s\n' "$response" | jq -r '.result.pane.workspace_id')"
         pane_id="$(printf '%s\n' "$response" | jq -r '.result.pane.pane_id')"
-        jq -nc --arg workspace "$workspace_id" --arg pane "$pane_id"           '{workspace_id:$workspace,pane_id:$pane,source:"pane_current"}'
+        jq -nc --arg workspace "$workspace_id" --arg pane "$pane_id" \
+          '{workspace_id:$workspace,pane_id:$pane,source:"pane_current"}'
         return
       fi
     fi
   fi
 
   if [[ -n "${CODEX_THREAD_ID:-}" ]]; then
-    if panes_json="$(pane_list_json 2>/dev/null)"; then
+    panes_json="$(pane_list_json 2>/dev/null || true)"
+
+    if [[ -n "$panes_json" ]]; then
       session_matches="$(printf '%s\n' "$panes_json" | jq -c --arg session "$CODEX_THREAD_ID" '
         [
           .result.panes[]
@@ -684,10 +688,38 @@ resolve_close_context() {
       if (( count == 1 )); then
         workspace_id="$(printf '%s\n' "$session_matches" | jq -r '.[0].workspace_id')"
         pane_id="$(printf '%s\n' "$session_matches" | jq -r '.[0].pane_id')"
-        jq -nc --arg workspace "$workspace_id" --arg pane "$pane_id"           '{workspace_id:$workspace,pane_id:$pane,source:"codex_thread"}'
+        jq -nc --arg workspace "$workspace_id" --arg pane "$pane_id" \
+          '{workspace_id:$workspace,pane_id:$pane,source:"codex_thread"}'
+        return
+      fi
+
+      root="$(git_root 2>/dev/null || pwd -P)"
+      cwd_matches="$(printf '%s\n' "$panes_json" | jq -c --arg root "$root" '
+        def under_root($value):
+          ($value // "") as $path
+          | $path == $root or ($path | startswith($root + "/"));
+        [
+          .result.panes[]
+          | select((.pane_id // "") != "" and (.workspace_id // "") != "")
+          | select(
+              ((.agent // "") | ascii_downcase) == "codex"
+              or ((.display_agent // "") | ascii_downcase) == "codex"
+            )
+          | select(under_root(.foreground_cwd) or under_root(.cwd))
+        ]
+      ')"
+      count="$(printf '%s\n' "$cwd_matches" | jq 'length')"
+      if (( count == 1 )); then
+        workspace_id="$(printf '%s\n' "$cwd_matches" | jq -r '.[0].workspace_id')"
+        pane_id="$(printf '%s\n' "$cwd_matches" | jq -r '.[0].pane_id')"
+        jq -nc --arg workspace "$workspace_id" --arg pane "$pane_id" \
+          '{workspace_id:$workspace,pane_id:$pane,source:"codex_cwd"}'
         return
       fi
     fi
+
+    warn "Codex shell detected, but its Herdr pane could not be identified safely."
+    return 1
   fi
 
   ws_json="$(workspace_list_json)" || return 1
@@ -699,7 +731,8 @@ resolve_close_context() {
       | .[0].workspace_id // empty
     ')"
     if [[ -n "$workspace_id" ]]; then
-      jq -nc --arg workspace "$workspace_id"         '{workspace_id:$workspace,pane_id:null,source:"workspace_env"}'
+      jq -nc --arg workspace "$workspace_id" \
+        '{workspace_id:$workspace,pane_id:null,source:"workspace_env"}'
       return
     fi
   fi
@@ -711,7 +744,8 @@ resolve_close_context() {
   count="$(printf '%s\n' "$matches" | jq 'length')"
   if (( count == 1 )); then
     workspace_id="$(printf '%s\n' "$matches" | jq -r '.[0].workspace_id')"
-    jq -nc --arg workspace "$workspace_id"       '{workspace_id:$workspace,pane_id:null,source:"cwd"}'
+    jq -nc --arg workspace "$workspace_id" \
+      '{workspace_id:$workspace,pane_id:null,source:"cwd"}'
     return
   fi
 
