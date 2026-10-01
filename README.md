@@ -10,7 +10,7 @@ Git checkout / worktree
 + reusable Herdr layout
 ```
 
-Current version: **0.7.0**
+Current version: **0.7.1**
 
 ## Install
 
@@ -357,7 +357,7 @@ hd close -y
 
 `-y` / `--yes` skips both the normal close confirmation and, when Herdr requires a whole worktree-group close, the second group confirmation.
 
-Without `-y` / `--yes`, `hd` asks for confirmation before closing the current workspace. Press **`y` or `Y` once** to confirm immediately; Enter is not required. Any other key cancels. After confirmation, `hd` runs a workspace-scoped agent cleanup policy, then closes the workspace. The current policy targets **Codex** panes only. Pane selection is constrained to the current `HERDR_WORKSPACE_ID`, so Codex panes in other workspaces are not targeted. Closing a Codex pane lets Herdr shut down that pane's PTY/process session before the workspace is removed. The Git checkout/worktree is kept intact.
+Without `-y` / `--yes`, `hd` asks for confirmation before closing the current workspace. Press **`y` or `Y` once** to confirm immediately; Enter is not required. Any other key cancels. After confirmation, `hd` first resolves the **live** workspace from the calling pane with `herdr pane current --current`. This matters because Herdr processes keep their launch-time `HERDR_WORKSPACE_ID` after cross-workspace pane moves, while the pane ID remains resolvable through Herdr's alias handling. `hd` then runs a workspace-scoped agent cleanup policy and closes that resolved workspace. The current cleanup policy targets **Codex** panes only. Closing a Codex pane lets Herdr shut down that pane's PTY/process session before the workspace is removed. When `hd close` is invoked **from inside Codex itself** (for example `! hd close -y`), `hd` deliberately skips the caller Codex pane during pre-cleanup so it does not kill its own command before `workspace close` runs. The final workspace close then owns shutdown of the caller pane. The Git checkout/worktree is kept intact.
 
 If the current workspace is a primary workspace with linked-worktree workspaces still open, Herdr requires explicit group intent. `hd` detects `workspace_group_close_required` and asks for a second confirmation before closing the whole Herdr workspace group.
 
@@ -399,6 +399,7 @@ In addition to dependency, socket, layout, repo, and stale-worktree checks, `doc
 
 ```text
 pane list
+pane current
 pane close
 workspace close
 worktree create
