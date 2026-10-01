@@ -687,7 +687,8 @@ cleanup_workspace_agents() {
     return 1
   fi
 
-  # Cleanup policy currently targets Codex only.\n  pane_ids="$(printf '%s\n' "$panes" | jq -r --arg workspace "$workspace_id" '
+  # Cleanup policy currently targets Codex only.
+  pane_ids="$(printf '%s\n' "$panes" | jq -r --arg workspace "$workspace_id" '
     .result.panes[]
     | select((.workspace_id // "") == $workspace)
     | select((.pane_id // "") != "")
