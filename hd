@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-HD_VERSION="0.7.1"
+HD_VERSION="0.7.2"
 CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 LAYOUT_DIR="${HD_LAYOUT_DIR:-$CONFIG_HOME/herdr/layouts}"
 DEFAULT_LAYOUT="${HD_DEFAULT_LAYOUT:-dev}"
@@ -651,7 +651,7 @@ confirm_action() {
 }
 
 resolve_close_context() {
-  local response workspace_id pane_id ws_json root matches count
+  local response workspace_id pane_id panes_json session_matches ws_json root matches count
 
   if [[ -n "${HERDR_PANE_ID:-}" ]]; then
     if response="$(herdr pane current --current 2>/dev/null)"; then
@@ -659,6 +659,32 @@ resolve_close_context() {
         workspace_id="$(printf '%s\n' "$response" | jq -r '.result.pane.workspace_id')"
         pane_id="$(printf '%s\n' "$response" | jq -r '.result.pane.pane_id')"
         jq -nc --arg workspace "$workspace_id" --arg pane "$pane_id"           '{workspace_id:$workspace,pane_id:$pane,source:"pane_current"}'
+        return
+      fi
+    fi
+  fi
+
+  if [[ -n "${CODEX_THREAD_ID:-}" ]]; then
+    if panes_json="$(pane_list_json 2>/dev/null)"; then
+      session_matches="$(printf '%s\n' "$panes_json" | jq -c --arg session "$CODEX_THREAD_ID" '
+        [
+          .result.panes[]
+          | select((.pane_id // "") != "" and (.workspace_id // "") != "")
+          | select(
+              ((.agent // "") | ascii_downcase) == "codex"
+              or ((.display_agent // "") | ascii_downcase) == "codex"
+            )
+          | select(
+              (.agent_session.agent // "codex" | ascii_downcase) == "codex"
+              and (.agent_session.value // "") == $session
+            )
+        ]
+      ')"
+      count="$(printf '%s\n' "$session_matches" | jq 'length')"
+      if (( count == 1 )); then
+        workspace_id="$(printf '%s\n' "$session_matches" | jq -r '.[0].workspace_id')"
+        pane_id="$(printf '%s\n' "$session_matches" | jq -r '.[0].pane_id')"
+        jq -nc --arg workspace "$workspace_id" --arg pane "$pane_id"           '{workspace_id:$workspace,pane_id:$pane,source:"codex_thread"}'
         return
       fi
     fi
